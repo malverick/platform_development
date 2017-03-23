@@ -32,12 +32,16 @@ static llvm::cl::OptionCategory header_checker_category(
     "header-checker options");
 
 static llvm::cl::opt<std::string> header_file(
-    llvm::cl::Positional, llvm::cl::desc("<header>"), llvm::cl::Required,
+    llvm::cl::Positional, llvm::cl::desc("<source.cpp>"), llvm::cl::Required,
     llvm::cl::cat(header_checker_category));
 
 static llvm::cl::opt<std::string> out_dump(
     "o", llvm::cl::value_desc("out_dump"), llvm::cl::Required,
     llvm::cl::desc("Specify the reference dump file name"),
+    llvm::cl::cat(header_checker_category));
+
+static llvm::cl::list<std::string> exported_header_dirs(
+    "I", llvm::cl::desc("<export_include_dirs>"), llvm::cl::OneOrMore,
     llvm::cl::cat(header_checker_category));
 
 // Hide irrelevant command line options defined in LLVM libraries.
@@ -57,21 +61,40 @@ static void HideIrrelevantCommandLineOptions() {
 int main(int argc, const char **argv) {
   HideIrrelevantCommandLineOptions();
 
+  // FIXME: Clang FORTIFY requires a version of clang at least as new as
+  // clang-3688880 (r285906). Since external/clang is currently r275480, we need
+  // to disable FORTIFY for this tool to function correctly.
+  std::vector<const char *> fixedArgv(argv, argv + argc);
+  fixedArgv.push_back("-U_FORTIFY_SOURCE");
+  int fixedArgc = fixedArgv.size();
+
   // Create compilation database from command line arguments after "--".
   std::unique_ptr<clang::tooling::CompilationDatabase> compilations(
       clang::tooling::FixedCompilationDatabase::loadFromCommandLine(
-          argc, argv));
+          fixedArgc, fixedArgv.data()));
 
   // Parse the command line options.
-  llvm::cl::ParseCommandLineOptions(argc, argv, "header-checker");
+  // Note that loadFromCommandLine may alter fixedArgc, so we can't use
+  // fixedArgv.size() here.
+  llvm::cl::ParseCommandLineOptions(fixedArgc, fixedArgv.data(),
+      "header-checker");
 
-  // Check the availability of input header file and reference dump file.
+  // Input header file existential check.
   if (!llvm::sys::fs::exists(header_file)) {
     llvm::errs() << "ERROR: Header file \"" << header_file << "\" not found\n";
     ::exit(1);
   }
 
-  // Check the availability of clang compilation options.
+  //Existential checks for exported dirs.
+  for (auto &&dir : exported_header_dirs) {
+    if (!llvm::sys::fs::exists(dir)) {
+      llvm::errs() << "ERROR: exported dir \"" << dir << "\" not found\n";
+      ::exit(1);
+    }
+  }
+
+  // Check whether we can create compilation database and deduce compiler
+  // options from command line options.
   if (!compilations) {
     llvm::errs() << "ERROR: Clang compilation options not specified.\n";
     ::exit(1);
@@ -81,9 +104,8 @@ int main(int argc, const char **argv) {
   std::vector<std::string> header_files{ header_file };
 
   clang::tooling::ClangTool tool(*compilations, header_files);
-
   std::unique_ptr<clang::tooling::FrontendActionFactory> factory(
-      new HeaderCheckerFrontendActionFactory(out_dump));
+      new HeaderCheckerFrontendActionFactory(out_dump, exported_header_dirs));
 
   return tool.run(factory.get());
 }

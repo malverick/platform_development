@@ -28,14 +28,18 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Lex/PPCallbacks.h>
 
+#include <set>
+
 class HeaderASTVisitor
     : public clang::RecursiveASTVisitor<HeaderASTVisitor> {
  public:
   HeaderASTVisitor(abi_dump::TranslationUnit *tu_ptr,
                    clang::MangleContext *mangle_contextp,
-                   const clang::ASTContext *ast_contextp,
+                   clang::ASTContext *ast_contextp,
                    const clang::CompilerInstance *compiler_instance_p,
-                   const std::string &current_file_name);
+                   const std::string &current_file_name,
+                   const std::set<std::string> &exported_headers,
+                   const clang::Decl *tu_decl);
 
   bool VisitRecordDecl(const clang::RecordDecl *decl);
 
@@ -43,7 +47,11 @@ class HeaderASTVisitor
 
   bool VisitEnumDecl(const clang::EnumDecl *decl);
 
-  //Enable recursive traversal of template instantiations.
+  bool VisitVarDecl(const clang::VarDecl *decl);
+
+  bool TraverseDecl(clang::Decl *decl);
+
+  // Enable recursive traversal of template instantiations.
   bool shouldVisitTemplateInstantiations() const {
     return true;
   }
@@ -51,16 +59,20 @@ class HeaderASTVisitor
  private:
   abi_dump::TranslationUnit *tu_ptr_;
   clang::MangleContext *mangle_contextp_;
-  const clang::ASTContext *ast_contextp_;
+  clang::ASTContext *ast_contextp_;
   const clang::CompilerInstance *cip_;
   const std::string current_file_name_;
+  const std::set<std::string> &exported_headers_;
+  // To optimize recursion into only exported abi.
+  const clang::Decl *tu_decl_;
 };
 
 class HeaderASTConsumer : public clang::ASTConsumer {
  public:
   HeaderASTConsumer(const std::string &file_name,
                     clang::CompilerInstance *compiler_instancep,
-                    const std::string &out_dump_name);
+                    const std::string &out_dump_name,
+                    const std::set<std::string> &exported_headers);
 
   void HandleTranslationUnit(clang::ASTContext &ctx) override;
 
@@ -70,6 +82,7 @@ class HeaderASTConsumer : public clang::ASTConsumer {
   std::string file_name_;
   clang::CompilerInstance *cip_;
   std::string out_dump_name_;
+  std::set<std::string> exported_headers_;
 };
 
 class HeaderASTPPCallbacks : public clang::PPCallbacks {
